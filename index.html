@@ -3,27 +3,39 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>WRC Studio Pro: Canvas Engine</title>
+    <title>WRC Studio Pro: Canvas Engine (Fixed)</title>
     <style>
         :root { --wrc-orange: #FF4D00; }
-        * { box-sizing: border-box; font-family: 'Arial Black', sans-serif; }
+        * { box-sizing: border-box; font-family: 'Arial Black', sans-serif; -webkit-font-smoothing: antialiased; }
         body { margin: 0; background: #000; color: white; display: flex; height: 100vh; overflow: hidden; }
 
-        /* Editor Panel */
-        #editor-panel { width: 400px; height: 100vh; background: #1a1a1a; border-right: 2px solid #333; display: flex; flex-direction: column; z-index: 1000; flex-shrink: 0; }
+        /* --- Editor Panel --- */
+        #editor-panel { width: 400px; height: 100vh; background: #1a1a1a; border-right: 2px solid #333; display: flex; flex-direction: column; z-index: 1000; flex-shrink: 0; transition: transform 0.4s; }
+        body.rec-mode #editor-panel { transform: translateX(-100%); position: absolute; }
         .editor-content { flex-grow: 1; overflow-y: auto; padding: 20px; }
         .editor-section { margin-bottom: 12px; background: #2a2a2a; padding: 10px; border-radius: 6px; }
-        input[type="text"], input[type="file"] { width: 100%; background: #000; border: 1px solid #444; color: white; padding: 8px; margin-top: 5px; border-radius: 4px; font-size: 11px; }
-        button.btn { background: var(--wrc-orange); color: white; border: none; padding: 10px; border-radius: 4px; font-weight: bold; cursor: pointer; width: 100%; margin-bottom: 5px; }
-        button.btn-rec { background: #d00; font-size: 14px; padding: 15px; margin-top: 10px; transition: 0.3s; }
+        label.asset-label { display: block; font-size: 10px; color: #0ff; font-weight: bold; margin-bottom: 5px; }
+        input[type="text"] { width: 100%; background: #000; border: 1px solid #444; color: white; padding: 8px; border-radius: 4px; font-size: 12px; }
+        input[type="file"] { width: 100%; color: #888; font-size: 11px; margin-top: 5px; }
+        
+        button.btn { background: var(--wrc-orange); color: white; border: none; padding: 10px; border-radius: 4px; font-weight: bold; cursor: pointer; width: 100%; margin-bottom: 5px; transition: 0.2s; }
+        button.btn:hover { opacity: 0.8; }
+        button.btn-rec { background: #d00; font-size: 14px; padding: 15px; margin-top: 10px; position: relative; overflow: hidden; }
         button.btn-rec:hover { background: #ff0000; }
+        button.btn-rec:disabled { background: #444; cursor: not-allowed; }
+
+        /* プログレスバー（録画ボタン内） */
+        #rec-progress-bar { position: absolute; bottom: 0; left: 0; height: 4px; background: rgba(255,255,255,0.5); width: 0%; transition: width 0.1s linear; }
         
-        /* Canvas Display */
-        #display-area { flex-grow: 1; display: flex; justify-content: center; align-items: center; background: #0a0a0a; position: relative; }
-        canvas { background: #000; max-width: 100%; max-height: 100%; object-fit: contain; box-shadow: 0 0 50px rgba(0,0,0,0.8); }
+        /* --- Display Area --- */
+        #display-area { flex-grow: 1; display: flex; justify-content: center; align-items: center; background: #0a0a0a; position: relative; overflow: hidden; }
+        canvas { background: #000; box-shadow: 0 0 50px rgba(0,0,0,0.8); /* プレビュー用のサイズ制御はJSで行う */ }
         
-        #rec-badge { position: absolute; top: 20px; right: 20px; background: red; padding: 5px 15px; border-radius: 20px; font-size: 12px; font-weight: bold; display: none; animation: blink 1s infinite; z-index: 2000; }
-        @keyframes blink { 50% { opacity: 0.5; } }
+        #status-badge { position: absolute; top: 20px; right: 20px; background: rgba(0,0,0,0.7); padding: 8px 15px; border-radius: 4px; font-size: 12px; font-weight: bold; display: none; align-items: center; gap: 8px; z-index: 2000; border: 1px solid #333; }
+        #status-icon { width: 10px; height: 10px; border-radius: 50%; background: #888; }
+        body.rec-mode #status-icon { background: red; animation: blink 1s infinite; }
+
+        @keyframes blink { 50% { opacity: 0.2; } }
     </style>
 </head>
 <body>
@@ -32,33 +44,36 @@
         <div style="padding:20px; border-bottom:1px solid #333;"><h2 style="margin:0; color:var(--wrc-orange); font-size:1.1rem;">WRC CANVAS ENGINE</h2></div>
         <div class="editor-content">
             <div class="editor-section">
-                <label style="font-size: 10px; color: #0ff;">1. BACKGROUND VIDEO (.mp4)</label>
+                <label class="asset-label">1. BACKGROUND VIDEO (.mp4)</label>
                 <input type="file" id="v-up" accept="video/mp4">
             </div>
             <div class="editor-section">
-                <label style="font-size: 10px; color: #0ff;">2. AUDIO (.mp3)</label>
-                <input type="file" id="a-up" accept="audio/*">
+                <label class="asset-label">2. AUDIO (.mp3 / .wav)</label>
+                <input type="file" id="a-up" accept="audio/mpeg, audio/wav, audio/*">
             </div>
             <div class="editor-section">
-                <label style="font-size: 10px; color: #0ff;">3. CUSTOM FONT (.ttf/.otf)</label>
+                <label class="asset-label">3. CUSTOM FONT (.ttf/.otf)</label>
                 <input type="file" id="f-up" accept=".ttf,.otf">
             </div>
             <div class="editor-section">
-                <label style="font-size: 10px; color: #aaa;">RALLY TITLE</label>
-                <input type="text" id="in-title" value="WRC RALLY SWEDEN" oninput="requestRender()">
+                <label style="font-size: 10px; color: #aaa; font-weight: bold;">RALLY TITLE</label>
+                <input type="text" id="in-title" value="WRC RALLY SWEDEN" oninput="saveData(); requestRender();">
             </div>
-            <button class="btn" style="background:#0055ff;" onclick="addRow('day')">+ ADD DATE</button>
-            <button class="btn" onclick="addRow('stage')">+ ADD STAGE</button>
+            <button class="btn" style="background:#0055ff; font-size:11px;" onclick="addRow('day')">+ ADD DATE</button>
+            <button class="btn" style="font-size:11px;" onclick="addRow('stage')">+ ADD STAGE</button>
             <div id="rows-editor" style="margin-top: 15px;"></div>
         </div>
         <div style="padding:20px; background:#111; border-top:1px solid #333;">
-            <button class="btn btn-rec" onclick="startExport()">🔴 SILENT EXPORT (MP4)</button>
-            <button class="btn" style="background:#444;" onclick="triggerPreview()">▶ PREVIEW ANIMATION</button>
+            <button class="btn btn-rec" id="rec-button" onclick="startExport()">
+                <span id="rec-text">🔴 SILENT EXPORT (FULL HD MP4)</span>
+                <div id="rec-progress-bar"></div>
+            </button>
+            <button class="btn" id="preview-button" style="background:#444;" onclick="triggerPreview()">▶ PREVIEW ANIMATION</button>
         </div>
     </div>
 
     <div id="display-area">
-        <div id="rec-badge">● RECORDING...</div>
+        <div id="status-badge"><div id="status-icon"></div><span id="status-text">STATUS</span></div>
         <canvas id="render-canvas" width="1920" height="1080"></canvas>
     </div>
 
@@ -66,53 +81,77 @@
     <audio id="audio-player"></audio>
 
     <script>
-        // --- データ状態 ---
-        let data = [
+        // --- 1. データ状態 & 保存機能 ---
+        let data = [];
+        const defaultData = [
             { type: 'day', text: 'THURSDAY 15 FEB' },
             { type: 'stage', day: "19:01", time: "Umeå Sprint 1" },
-            { type: 'day', text: 'FRIDAY 16 FEB' },
-            { type: 'stage', day: "08:58", time: "Brattby 1" }
+            { type: 'day', text: 'FRIDAY 16 FEB' }
         ];
 
-        // --- Canvas & Context ---
+        function saveData() {
+            const settings = {
+                data: data,
+                title: document.getElementById('in-title').value
+            };
+            localStorage.setItem('wrc_canvas_save_v1', JSON.stringify(settings));
+        }
+
+        function loadData() {
+            const saved = localStorage.getItem('wrc_canvas_save_v1');
+            if (saved) {
+                const s = JSON.parse(saved);
+                data = s.data;
+                document.getElementById('in-title').value = s.title;
+            } else { data = defaultData; }
+        }
+
+        // --- 2. Canvas & レンダリングエンジン ---
         const canvas = document.getElementById('render-canvas');
         const ctx = canvas.getContext('2d');
         const bgVideo = document.getElementById('bg-video');
         const audio = document.getElementById('audio-player');
         
-        // フォント設定
         let currentFont = "'Arial Black', sans-serif";
-        
-        // --- アニメーション制御 ---
         let animState = 'idle'; // idle, in, out
         let animStartTime = 0;
         let isRecording = false;
-        const SPEED = 600; // 1行あたりのアニメーション完了時間(ms)
+        
+        const SPEED = 600; // 1行あたりのアニメーション時間(ms)
         const STAGGER = 80; // 行ごとの遅延(ms)
 
-        // --- イージング関数 (Cubic Bezier近似) ---
         function easeOutQuart(x) { return 1 - Math.pow(1 - x, 4); }
 
-        // --- 描画ループ ---
+        // プレビュー用のCanvasサイズ調整（アスペクト比維持）
+        function resizePreviewCanvas() {
+            const container = document.getElementById('display-area');
+            const editorPnl = document.getElementById('editor-panel');
+            const availableW = window.innerWidth - (document.body.classList.contains('rec-mode') ? 0 : editorPnl.offsetWidth);
+            const availableH = window.innerHeight;
+            
+            const scale = Math.min(availableW / 1920, availableH / 1080) * 0.9;
+            canvas.style.width = `${1920 * scale}px`;
+            canvas.style.height = `${1080 * scale}px`;
+        }
+
         function drawFrame(now) {
+            // 内部解像度(1920x1080)で描画
             ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-            // 1. 背景動画の描画
-            if (!bgVideo.paused && !bgVideo.ended && bgVideo.readyState >= 2) {
-                // アスペクト比を維持してカバー描画
+            // 背景動画
+            if (bgVideo.src && bgVideo.readyState >= 2) {
                 const scale = Math.max(canvas.width / bgVideo.videoWidth, canvas.height / bgVideo.videoHeight);
                 const w = bgVideo.videoWidth * scale;
                 const h = bgVideo.videoHeight * scale;
                 ctx.drawImage(bgVideo, (canvas.width - w)/2, (canvas.height - h)/2, w, h);
+            } else {
+                ctx.fillStyle = '#050a10'; ctx.fillRect(0, 0, canvas.width, canvas.height);
             }
             
-            // 2. ダークオーバーレイ
-            ctx.fillStyle = 'rgba(0, 0, 0, 0.4)';
-            ctx.fillRect(0, 0, canvas.width, canvas.height);
+            // オーバーレイ
+            ctx.fillStyle = 'rgba(0, 0, 0, 0.3)'; ctx.fillRect(0, 0, canvas.width, canvas.height);
 
-            // 3. WRC UI の描画
             drawWRCUI(now);
-
             requestAnimationFrame(drawFrame);
         }
 
@@ -121,222 +160,252 @@
             const startX = (canvas.width - uiW) / 2;
             const startY = (canvas.height - uiH) / 2;
 
-            // 全体のフェードイン・アウト処理（ベース枠）
             let globalAlpha = 1;
-            if (animState === 'idle' && !isRecording) globalAlpha = 0.5; // プレビュー待機時は半透明
-            if (animState === 'in') {
-                const elapsed = now - animStartTime;
-                globalAlpha = Math.min(1, elapsed / 300);
-            } else if (animState === 'out') {
-                const elapsed = now - animStartTime;
-                globalAlpha = Math.max(0, 1 - (elapsed / 500));
-            }
-            if (globalAlpha <= 0) return;
+            if (animState === 'idle' && !isRecording) globalAlpha = 0.3; // 待機時は薄く
+            if (animState === 'in') globalAlpha = Math.min(1, (now - animStartTime) / 300);
+            else if (animState === 'out') globalAlpha = Math.max(0, 1 - ((now - animStartTime) / 500));
             
+            if (globalAlpha <= 0 && (animState === 'out' || animState === 'idle')) return;
             ctx.globalAlpha = globalAlpha;
 
-            // 外枠と左のオレンジライン
-            ctx.fillStyle = 'rgba(5, 15, 35, 0.98)'; // WRC Navy
+            // 基盤
+            ctx.fillStyle = 'rgba(5, 15, 35, 0.98)';
             ctx.fillRect(startX, startY, uiW, uiH);
-            ctx.fillStyle = '#FF4D00';
+            ctx.fillStyle = '#FF4D00'; // 左ライン
             ctx.fillRect(startX, startY, 18, uiH);
 
             const contentX = startX + 50;
             let currentY = startY + 40;
-
-            // 行データ生成（ヘッダー + スケジュール）
-            const rows = [{ type: 'header', title: document.getElementById('in-title').value }];
-            data.forEach(d => rows.push(d));
+            const rows = [{ type: 'header', title: document.getElementById('in-title').value }, ...data];
 
             rows.forEach((row, index) => {
                 const delay = index * STAGGER;
-                let progress = 0;
+                let p = 0; // 進行度(0~1)
 
-                if (animState === 'in') {
-                    progress = Math.max(0, Math.min(1, (now - animStartTime - delay) / SPEED));
-                } else if (animState === 'out') {
-                    progress = Math.max(0, Math.min(1, 1 - ((now - animStartTime - delay) / (SPEED * 0.8))));
-                } else if (animState === 'idle') {
-                    progress = 1; // 常に表示
-                }
+                if (animState === 'in') p = easeOutQuart(Math.max(0, Math.min(1, (now - animStartTime - delay) / SPEED)));
+                else if (animState === 'out') p = easeOutQuart(Math.max(0, Math.min(1, 1 - ((now - animStartTime - delay) / (SPEED * 0.7)))));
+                else if (animState === 'idle') p = 1;
 
-                const p = easeOutQuart(progress);
-                if (p <= 0) return; // まだ表示されない
+                if (p <= 0) return;
 
                 const isHeader = row.type === 'header';
                 const rowH = isHeader ? 125 : (row.type === 'day' ? 38 : 50);
                 const rowMargin = isHeader ? 25 : (row.type === 'day' ? 15 : 8);
                 const rowW = uiW - 100;
-
-                // ワイプバーの位置とコンテンツのクリッピング
-                const wipeBarW = rowW;
-                const wipeX = -wipeBarW + (p * wipeBarW * 2);
+                const wipeX = -rowW + (p * rowW * 2);
 
                 ctx.save();
-                // 行の領域でクリップ
-                ctx.beginPath();
-                ctx.rect(contentX, currentY, rowW, rowH);
-                ctx.clip();
+                ctx.beginPath(); ctx.rect(contentX, currentY, rowW, rowH); ctx.clip(); // 行エリアでクリップ
 
-                // 1. コンテンツ背景とテキスト (左から右へ徐々に表示)
+                // コンテンツ背景＆テキスト（進行度 p でクリップ）
                 ctx.save();
-                ctx.beginPath();
-                ctx.rect(contentX, currentY, rowW * p, rowH); // 進行度に合わせてクリップ幅を広げる
-                ctx.clip();
-
+                ctx.beginPath(); ctx.rect(contentX, currentY, rowW * p, rowH); ctx.clip();
+                
                 if (isHeader) {
-                    ctx.fillStyle = '#FF4D00';
-                    ctx.fillRect(contentX, currentY, rowW, rowH);
-                    ctx.fillStyle = '#fff';
-                    ctx.textAlign = 'center';
-                    ctx.textBaseline = 'middle';
-                    ctx.font = `bold 50px ${currentFont}`;
-                    ctx.fillText(row.title, contentX + rowW/2, currentY + rowH/2 - 10);
-                    ctx.font = `bold 14px ${currentFont}`;
-                    ctx.letterSpacing = "5px";
-                    ctx.fillText("SCHEDULE", contentX + rowW/2, currentY + rowH/2 + 25);
-                    ctx.letterSpacing = "0px"; // リセット
+                    ctx.fillStyle = '#FF4D00'; ctx.fillRect(contentX, currentY, rowW, rowH);
+                    ctx.fillStyle = '#fff'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+                    ctx.font = `bold 52px ${currentFont}`; ctx.fillText(row.title, contentX + rowW/2, currentY + rowH/2 - 10);
+                    ctx.font = `bold 14px ${currentFont}`; ctx.fillText("SCHEDULE", contentX + rowW/2, currentY + rowH/2 + 28);
                 } else {
-                    ctx.fillStyle = 'rgba(0, 5, 15, 0.98)';
-                    ctx.fillRect(contentX, currentY, rowW, rowH);
-                    
-                    ctx.textAlign = 'left';
-                    ctx.textBaseline = 'middle';
+                    ctx.fillStyle = 'rgba(0, 5, 15, 0.98)'; ctx.fillRect(contentX, currentY, rowW, rowH);
+                    ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
                     if (row.type === 'day') {
-                        ctx.fillStyle = '#bbb';
-                        ctx.font = `bold 14px ${currentFont}`;
-                        ctx.letterSpacing = "2px";
-                        ctx.fillText(row.text, contentX + 45, currentY + rowH/2);
-                        ctx.letterSpacing = "0px";
+                        ctx.fillStyle = '#aaa'; ctx.font = `bold 15px ${currentFont}`; ctx.fillText(row.text, contentX + 45, currentY + rowH/2);
                     } else {
-                        ctx.fillStyle = '#FF4D00';
-                        ctx.font = `bold 20px ${currentFont}`;
-                        ctx.fillText(row.day, contentX + 45, currentY + rowH/2);
-                        ctx.fillStyle = '#fff';
-                        ctx.fillText(row.time, contentX + 160, currentY + rowH/2);
+                        ctx.fillStyle = '#FF4D00'; ctx.font = `bold 22px ${currentFont}`; ctx.fillText(row.day, contentX + 45, currentY + rowH/2);
+                        ctx.fillStyle = '#fff'; ctx.font = `bold 22px ${currentFont}`; ctx.fillText(row.time, contentX + 165, currentY + rowH/2);
                     }
                 }
                 ctx.restore();
 
-                // 2. ワイプバー（オレンジや白の通り過ぎるバー）
+                // ワイプバー（上層）
                 ctx.fillStyle = isHeader ? '#fff' : '#FF4D00';
-                ctx.fillRect(contentX + wipeX, currentY, wipeBarW, rowH);
+                ctx.fillRect(contentX + wipeX, currentY, rowW, rowH);
 
                 ctx.restore();
                 currentY += rowH + rowMargin;
             });
-
             ctx.globalAlpha = 1;
         }
 
-        // --- 録画処理 ---
+        // --- 3. 録画＆書き出し (WebCodecs互換 MediaRecorder) ---
+        const recButton = document.getElementById('rec-button');
+        const recText = document.getElementById('rec-text');
+        const progressBar = document.getElementById('rec-progress-bar');
+        const statusBadge = document.getElementById('status-badge');
+        const statusText = document.getElementById('status-text');
+
         async function startExport() {
             if (isRecording) return;
-            isRecording = true;
-            document.getElementById('rec-badge').style.display = 'block';
+            
+            // アセット確認
+            if(!bgVideo.src) { alert("背景動画(.mp4)をアップロードしてください。"); return; }
 
-            // 音声ミックス用 AudioContext
-            const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-            const dest = audioCtx.createMediaStreamDestination();
-            
-            // キャンバスから映像ストリームを取得 (60fps固定)
-            const canvasStream = canvas.captureStream(60);
-            
-            if (audio.src) {
-                const source = audioCtx.createMediaElementSource(audio);
-                source.connect(dest);
-                source.connect(audioCtx.destination); // スピーカーからも鳴らす
-                // 映像と音声を結合
-                dest.stream.getAudioTracks().forEach(track => canvasStream.addTrack(track));
-                audio.currentTime = 0;
-                audio.play();
-            }
-
-            // MediaRecorder設定 (WebM形式で高画質保存)
-            const options = { mimeType: 'video/webm;codecs=vp9', videoBitsPerSecond: 15000000 };
-            const recorder = new MediaRecorder(canvasStream, options);
-            const chunks = [];
-            
-            recorder.ondataavailable = e => chunks.push(e.data);
-            recorder.onstop = () => {
-                const blob = new Blob(chunks, { type: 'video/webm' });
-                const url = URL.createObjectURL(blob);
-                const a = document.createElement('a');
-                a.href = url;
-                // ブラウザ標準はWebMコンテナになりますが、MP4として保存すると多くの環境で読めます
-                a.download = `${document.getElementById('in-title').value || 'WRC_Export'}.mp4`;
-                a.click();
+            try {
+                isRecording = true;
+                recButton.disabled = true;
+                previewButton.disabled = true;
+                recText.innerText = "🎬 PREPARING...";
+                progressBar.style.width = "0%";
                 
-                isRecording = false;
-                document.getElementById('rec-badge').style.display = 'none';
-                if(audio.src) audio.pause();
-                animState = 'idle';
-            };
+                // 1. Audio Setup (Web Audio API でミックス)
+                const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+                const dest = audioCtx.createMediaStreamDestination();
+                
+                // Canvas Stream (Full HD, 60fps固定)
+                const canvasStream = canvas.captureStream(60);
+                
+                if (audio.src) {
+                    await audio.play(); audio.pause(); // IOS/Safari対策
+                    const source = audioCtx.createMediaElementSource(audio);
+                    source.connect(dest);
+                    // 映像に音声を結合
+                    dest.stream.getAudioTracks().forEach(track => canvasStream.addTrack(track));
+                }
 
-            recorder.start();
+                // 2. MediaRecorder Setup (高ビットレート18Mbps)
+                const options = { mimeType: 'video/webm;codecs=vp9', videoBitsPerSecond: 18000000 };
+                const recorder = new MediaRecorder(canvasStream, options);
+                const chunks = [];
+                recorder.ondataavailable = e => { if(e.data.size > 0) chunks.push(e.data); };
 
-            // 録画用アニメーションシーケンス
-            animState = 'in';
-            animStartTime = performance.now();
-            
-            // 全ての行が表示されるまで待機（行数 × 80ms + 600ms）+ 3秒キープ
-            const displayTime = (data.length * STAGGER) + SPEED + 3000;
-            await new Promise(r => setTimeout(r, displayTime));
-            
-            // 退場アニメーション
-            animState = 'out';
-            animStartTime = performance.now();
-            await new Promise(r => setTimeout(r, (data.length * STAGGER) + SPEED));
-            
-            recorder.stop();
+                // 3. 録画終了後の処理
+                recorder.onstop = async () => {
+                    recText.innerText = "📦 MUXING MP4...";
+                    statusText.innerText = "PROCESSING...";
+                    progressBar.style.width = "90%";
+                    
+                    await new Promise(r => setTimeout(r, 500)); // バッファ待ち
+
+                    const blob = new Blob(chunks, { type: 'video/webm' });
+                    const a = document.createElement('a');
+                    a.href = URL.createObjectURL(blob);
+                    a.download = `${document.getElementById('in-title').value || 'WRC_Studio'}_1080p.mp4`;
+                    a.click();
+                    
+                    // リセット
+                    cleanupExport(audioCtx);
+                };
+
+                // 4. シーケンス開始
+                document.body.classList.add('rec-mode');
+                statusBadge.style.display = 'flex';
+                statusText.innerText = "REC: ANIM-IN";
+                resizePreviewCanvas();
+
+                recorder.start();
+                
+                // アニメーション In
+                animState = 'in';
+                animStartTime = performance.now();
+                if(audio.src) { audio.currentTime = 0; audio.volume = 1; audio.play(); }
+
+                const totalInTime = (data.length * STAGGER) + SPEED;
+                await updateProgress(totalInTime, 0, 40); // 0% -> 40%
+
+                // キープ (3秒)
+                statusText.innerText = "REC: KEEP";
+                await updateProgress(3000, 40, 70); // 40% -> 70%
+
+                // アニメーション Out
+                statusText.innerText = "REC: ANIM-OUT";
+                animState = 'out';
+                animStartTime = performance.now();
+                const totalOutTime = (data.length * STAGGER) + SPEED;
+                await updateProgress(totalOutTime, 70, 85); // 70% -> 85%
+                
+                // 確実に描画が終わるまで待機
+                await new Promise(r => setTimeout(r, 200));
+
+                // 5. 録画停止
+                recorder.stop();
+
+            } catch (err) {
+                console.error("Export Failed:", err);
+                alert("書き出しに失敗しました。ブラウザのコンソールを確認してください。");
+                cleanupExport();
+            }
         }
 
-        // --- プレビュー ---
+        // プログレスバー更新関数
+        function updateProgress(duration, startPercent, endPercent) {
+            return new Promise(resolve => {
+                const startTime = performance.now();
+                const timer = setInterval(() => {
+                    const elapsed = performance.now() - startTime;
+                    const p = Math.min(1, elapsed / duration);
+                    const currPercent = startPercent + (endPercent - startPercent) * p;
+                    progressBar.style.width = `${currPercent}%`;
+                    if (p >= 1) { clearInterval(timer); resolve(); }
+                }, 100);
+            });
+        }
+
+        function cleanupExport(audioCtx) {
+            isRecording = false;
+            recButton.disabled = false;
+            previewButton.disabled = false;
+            recText.innerText = "🔴 SILENT EXPORT (FULL HD MP4)";
+            progressBar.style.width = "0%";
+            statusBadge.style.display = 'none';
+            document.body.classList.remove('rec-mode');
+            animState = 'idle';
+            if(audioCtx) audioCtx.close();
+            if(audio.src) { audio.pause(); audio.currentTime = 0; }
+            resizePreviewCanvas();
+        }
+
+        // --- 4. その他の機能 (プレビュー、エディタ等) ---
+        const previewButton = document.getElementById('preview-button');
         function triggerPreview() {
-            if(isRecording) return;
+            if(isRecording || !bgVideo.src) return;
             animState = 'in'; animStartTime = performance.now();
-            if (audio.src) { audio.currentTime = 0; audio.play(); }
+            if (audio.src) { audio.currentTime = 0; audio.volume = 1; audio.play(); }
+            
+            const keepTime = (data.length * STAGGER) + SPEED + 2000;
             setTimeout(() => {
                 if(isRecording) return;
                 animState = 'out'; animStartTime = performance.now();
-                setTimeout(() => { animState = 'idle'; if(audio.src) audio.pause(); }, 1500);
-            }, 3000);
+                setTimeout(() => { 
+                    if(isRecording) return;
+                    animState = 'idle'; if(audio.src) audio.pause(); 
+                }, (data.length * STAGGER) + SPEED + 200);
+            }, keepTime);
         }
 
         function requestRender() { if(animState === 'idle') drawFrame(performance.now()); }
 
-        // --- UI構築 ---
         function buildEditor() {
             const root = document.getElementById('rows-editor');
             root.innerHTML = data.map((item, i) => `<div class="editor-section" style="display:flex; gap:5px; align-items:center;">
                 ${item.type === 'day' 
-                    ? `<input type="text" value="${item.text}" oninput="data[${i}].text=this.value;requestRender()">` 
-                    : `<input style="width:70px" type="text" value="${item.day}" oninput="data[${i}].day=this.value;requestRender()"><input type="text" value="${item.time}" oninput="data[${i}].time=this.value;requestRender()">`}
-                <button onclick="data.splice(${i},1);buildEditor();requestRender()" style="background:#822; border:none; color:white; padding:8px; border-radius:4px; cursor:pointer;">X</button>
+                    ? `<input type="text" value="${item.text}" oninput="data[${i}].text=this.value;updatePreview();saveData();">` 
+                    : `<input style="width:70px; text-align:center;" type="text" value="${item.day}" oninput="data[${i}].day=this.value;updatePreview();saveData();"><input type="text" value="${item.time}" oninput="data[${i}].time=this.value;updatePreview();saveData();">`}
+                <button onclick="data.splice(${i},1);buildEditor();updatePreview();saveData();" style="background:#522; border:none; color:white; padding:8px 12px; border-radius:4px; cursor:pointer; font-weight:bold;">X</button>
             </div>`).join('');
         }
-        function addRow(t) { data.push(t==='day' ? {type:'day', text:'NEW DATE'} : {type:'stage', day:'00:00', time:'New Stage'}); buildEditor(); requestRender(); }
+        function addRow(t) { data.push(t==='day' ? {type:'day', text:'NEW DATE'} : {type:'stage', day:'00:00', time:'New Stage'}); buildEditor(); updatePreview(); saveData(); }
 
-        // --- ファイル読み込み ---
-        document.getElementById('v-up').onchange = e => { if(e.target.files[0]) { bgVideo.src = URL.createObjectURL(e.target.files[0]); bgVideo.play(); }};
+        // ファイル処理
+        document.getElementById('v-up').onchange = e => { if(e.target.files[0]) { bgVideo.src = URL.createObjectURL(e.target.files[0]); }};
         document.getElementById('a-up').onchange = e => { if(e.target.files[0]) audio.src = URL.createObjectURL(e.target.files[0]); };
-        
-        // フォントのCanvasへの読み込み処理
         document.getElementById('f-up').onchange = async e => { 
             const file = e.target.files[0];
             if(file) {
                 const fontName = 'CustomFont_' + Date.now();
                 const font = new FontFace(fontName, await file.arrayBuffer());
-                await font.load();
-                document.fonts.add(font);
-                currentFont = `${fontName}, 'Arial Black', sans-serif`;
-                requestRender();
+                await font.load(); document.fonts.add(font);
+                currentFont = `${fontName}, 'Arial Black', sans-serif`; requestRender();
             }
         };
 
         // 初期化
+        window.addEventListener('resize', resizePreviewCanvas);
+        loadData();
         buildEditor();
-        requestAnimationFrame(drawFrame);
+        updatePreview();
+        resizePreviewCanvas();
+        requestAnimationFrame(drawFrame); // ループ開始
     </script>
 </body>
 </html>
