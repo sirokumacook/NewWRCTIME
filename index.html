@@ -1,0 +1,342 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>WRC Studio Pro: Canvas Engine</title>
+    <style>
+        :root { --wrc-orange: #FF4D00; }
+        * { box-sizing: border-box; font-family: 'Arial Black', sans-serif; }
+        body { margin: 0; background: #000; color: white; display: flex; height: 100vh; overflow: hidden; }
+
+        /* Editor Panel */
+        #editor-panel { width: 400px; height: 100vh; background: #1a1a1a; border-right: 2px solid #333; display: flex; flex-direction: column; z-index: 1000; flex-shrink: 0; }
+        .editor-content { flex-grow: 1; overflow-y: auto; padding: 20px; }
+        .editor-section { margin-bottom: 12px; background: #2a2a2a; padding: 10px; border-radius: 6px; }
+        input[type="text"], input[type="file"] { width: 100%; background: #000; border: 1px solid #444; color: white; padding: 8px; margin-top: 5px; border-radius: 4px; font-size: 11px; }
+        button.btn { background: var(--wrc-orange); color: white; border: none; padding: 10px; border-radius: 4px; font-weight: bold; cursor: pointer; width: 100%; margin-bottom: 5px; }
+        button.btn-rec { background: #d00; font-size: 14px; padding: 15px; margin-top: 10px; transition: 0.3s; }
+        button.btn-rec:hover { background: #ff0000; }
+        
+        /* Canvas Display */
+        #display-area { flex-grow: 1; display: flex; justify-content: center; align-items: center; background: #0a0a0a; position: relative; }
+        canvas { background: #000; max-width: 100%; max-height: 100%; object-fit: contain; box-shadow: 0 0 50px rgba(0,0,0,0.8); }
+        
+        #rec-badge { position: absolute; top: 20px; right: 20px; background: red; padding: 5px 15px; border-radius: 20px; font-size: 12px; font-weight: bold; display: none; animation: blink 1s infinite; z-index: 2000; }
+        @keyframes blink { 50% { opacity: 0.5; } }
+    </style>
+</head>
+<body>
+
+    <div id="editor-panel">
+        <div style="padding:20px; border-bottom:1px solid #333;"><h2 style="margin:0; color:var(--wrc-orange); font-size:1.1rem;">WRC CANVAS ENGINE</h2></div>
+        <div class="editor-content">
+            <div class="editor-section">
+                <label style="font-size: 10px; color: #0ff;">1. BACKGROUND VIDEO (.mp4)</label>
+                <input type="file" id="v-up" accept="video/mp4">
+            </div>
+            <div class="editor-section">
+                <label style="font-size: 10px; color: #0ff;">2. AUDIO (.mp3)</label>
+                <input type="file" id="a-up" accept="audio/*">
+            </div>
+            <div class="editor-section">
+                <label style="font-size: 10px; color: #0ff;">3. CUSTOM FONT (.ttf/.otf)</label>
+                <input type="file" id="f-up" accept=".ttf,.otf">
+            </div>
+            <div class="editor-section">
+                <label style="font-size: 10px; color: #aaa;">RALLY TITLE</label>
+                <input type="text" id="in-title" value="WRC RALLY SWEDEN" oninput="requestRender()">
+            </div>
+            <button class="btn" style="background:#0055ff;" onclick="addRow('day')">+ ADD DATE</button>
+            <button class="btn" onclick="addRow('stage')">+ ADD STAGE</button>
+            <div id="rows-editor" style="margin-top: 15px;"></div>
+        </div>
+        <div style="padding:20px; background:#111; border-top:1px solid #333;">
+            <button class="btn btn-rec" onclick="startExport()">🔴 SILENT EXPORT (MP4)</button>
+            <button class="btn" style="background:#444;" onclick="triggerPreview()">▶ PREVIEW ANIMATION</button>
+        </div>
+    </div>
+
+    <div id="display-area">
+        <div id="rec-badge">● RECORDING...</div>
+        <canvas id="render-canvas" width="1920" height="1080"></canvas>
+    </div>
+
+    <video id="bg-video" loop muted playsinline style="display:none;"></video>
+    <audio id="audio-player"></audio>
+
+    <script>
+        // --- データ状態 ---
+        let data = [
+            { type: 'day', text: 'THURSDAY 15 FEB' },
+            { type: 'stage', day: "19:01", time: "Umeå Sprint 1" },
+            { type: 'day', text: 'FRIDAY 16 FEB' },
+            { type: 'stage', day: "08:58", time: "Brattby 1" }
+        ];
+
+        // --- Canvas & Context ---
+        const canvas = document.getElementById('render-canvas');
+        const ctx = canvas.getContext('2d');
+        const bgVideo = document.getElementById('bg-video');
+        const audio = document.getElementById('audio-player');
+        
+        // フォント設定
+        let currentFont = "'Arial Black', sans-serif";
+        
+        // --- アニメーション制御 ---
+        let animState = 'idle'; // idle, in, out
+        let animStartTime = 0;
+        let isRecording = false;
+        const SPEED = 600; // 1行あたりのアニメーション完了時間(ms)
+        const STAGGER = 80; // 行ごとの遅延(ms)
+
+        // --- イージング関数 (Cubic Bezier近似) ---
+        function easeOutQuart(x) { return 1 - Math.pow(1 - x, 4); }
+
+        // --- 描画ループ ---
+        function drawFrame(now) {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+            // 1. 背景動画の描画
+            if (!bgVideo.paused && !bgVideo.ended && bgVideo.readyState >= 2) {
+                // アスペクト比を維持してカバー描画
+                const scale = Math.max(canvas.width / bgVideo.videoWidth, canvas.height / bgVideo.videoHeight);
+                const w = bgVideo.videoWidth * scale;
+                const h = bgVideo.videoHeight * scale;
+                ctx.drawImage(bgVideo, (canvas.width - w)/2, (canvas.height - h)/2, w, h);
+            }
+            
+            // 2. ダークオーバーレイ
+            ctx.fillStyle = 'rgba(0, 0, 0, 0.4)';
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+            // 3. WRC UI の描画
+            drawWRCUI(now);
+
+            requestAnimationFrame(drawFrame);
+        }
+
+        function drawWRCUI(now) {
+            const uiW = 1350; const uiH = 720;
+            const startX = (canvas.width - uiW) / 2;
+            const startY = (canvas.height - uiH) / 2;
+
+            // 全体のフェードイン・アウト処理（ベース枠）
+            let globalAlpha = 1;
+            if (animState === 'idle' && !isRecording) globalAlpha = 0.5; // プレビュー待機時は半透明
+            if (animState === 'in') {
+                const elapsed = now - animStartTime;
+                globalAlpha = Math.min(1, elapsed / 300);
+            } else if (animState === 'out') {
+                const elapsed = now - animStartTime;
+                globalAlpha = Math.max(0, 1 - (elapsed / 500));
+            }
+            if (globalAlpha <= 0) return;
+            
+            ctx.globalAlpha = globalAlpha;
+
+            // 外枠と左のオレンジライン
+            ctx.fillStyle = 'rgba(5, 15, 35, 0.98)'; // WRC Navy
+            ctx.fillRect(startX, startY, uiW, uiH);
+            ctx.fillStyle = '#FF4D00';
+            ctx.fillRect(startX, startY, 18, uiH);
+
+            const contentX = startX + 50;
+            let currentY = startY + 40;
+
+            // 行データ生成（ヘッダー + スケジュール）
+            const rows = [{ type: 'header', title: document.getElementById('in-title').value }];
+            data.forEach(d => rows.push(d));
+
+            rows.forEach((row, index) => {
+                const delay = index * STAGGER;
+                let progress = 0;
+
+                if (animState === 'in') {
+                    progress = Math.max(0, Math.min(1, (now - animStartTime - delay) / SPEED));
+                } else if (animState === 'out') {
+                    progress = Math.max(0, Math.min(1, 1 - ((now - animStartTime - delay) / (SPEED * 0.8))));
+                } else if (animState === 'idle') {
+                    progress = 1; // 常に表示
+                }
+
+                const p = easeOutQuart(progress);
+                if (p <= 0) return; // まだ表示されない
+
+                const isHeader = row.type === 'header';
+                const rowH = isHeader ? 125 : (row.type === 'day' ? 38 : 50);
+                const rowMargin = isHeader ? 25 : (row.type === 'day' ? 15 : 8);
+                const rowW = uiW - 100;
+
+                // ワイプバーの位置とコンテンツのクリッピング
+                const wipeBarW = rowW;
+                const wipeX = -wipeBarW + (p * wipeBarW * 2);
+
+                ctx.save();
+                // 行の領域でクリップ
+                ctx.beginPath();
+                ctx.rect(contentX, currentY, rowW, rowH);
+                ctx.clip();
+
+                // 1. コンテンツ背景とテキスト (左から右へ徐々に表示)
+                ctx.save();
+                ctx.beginPath();
+                ctx.rect(contentX, currentY, rowW * p, rowH); // 進行度に合わせてクリップ幅を広げる
+                ctx.clip();
+
+                if (isHeader) {
+                    ctx.fillStyle = '#FF4D00';
+                    ctx.fillRect(contentX, currentY, rowW, rowH);
+                    ctx.fillStyle = '#fff';
+                    ctx.textAlign = 'center';
+                    ctx.textBaseline = 'middle';
+                    ctx.font = `bold 50px ${currentFont}`;
+                    ctx.fillText(row.title, contentX + rowW/2, currentY + rowH/2 - 10);
+                    ctx.font = `bold 14px ${currentFont}`;
+                    ctx.letterSpacing = "5px";
+                    ctx.fillText("SCHEDULE", contentX + rowW/2, currentY + rowH/2 + 25);
+                    ctx.letterSpacing = "0px"; // リセット
+                } else {
+                    ctx.fillStyle = 'rgba(0, 5, 15, 0.98)';
+                    ctx.fillRect(contentX, currentY, rowW, rowH);
+                    
+                    ctx.textAlign = 'left';
+                    ctx.textBaseline = 'middle';
+                    if (row.type === 'day') {
+                        ctx.fillStyle = '#bbb';
+                        ctx.font = `bold 14px ${currentFont}`;
+                        ctx.letterSpacing = "2px";
+                        ctx.fillText(row.text, contentX + 45, currentY + rowH/2);
+                        ctx.letterSpacing = "0px";
+                    } else {
+                        ctx.fillStyle = '#FF4D00';
+                        ctx.font = `bold 20px ${currentFont}`;
+                        ctx.fillText(row.day, contentX + 45, currentY + rowH/2);
+                        ctx.fillStyle = '#fff';
+                        ctx.fillText(row.time, contentX + 160, currentY + rowH/2);
+                    }
+                }
+                ctx.restore();
+
+                // 2. ワイプバー（オレンジや白の通り過ぎるバー）
+                ctx.fillStyle = isHeader ? '#fff' : '#FF4D00';
+                ctx.fillRect(contentX + wipeX, currentY, wipeBarW, rowH);
+
+                ctx.restore();
+                currentY += rowH + rowMargin;
+            });
+
+            ctx.globalAlpha = 1;
+        }
+
+        // --- 録画処理 ---
+        async function startExport() {
+            if (isRecording) return;
+            isRecording = true;
+            document.getElementById('rec-badge').style.display = 'block';
+
+            // 音声ミックス用 AudioContext
+            const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+            const dest = audioCtx.createMediaStreamDestination();
+            
+            // キャンバスから映像ストリームを取得 (60fps固定)
+            const canvasStream = canvas.captureStream(60);
+            
+            if (audio.src) {
+                const source = audioCtx.createMediaElementSource(audio);
+                source.connect(dest);
+                source.connect(audioCtx.destination); // スピーカーからも鳴らす
+                // 映像と音声を結合
+                dest.stream.getAudioTracks().forEach(track => canvasStream.addTrack(track));
+                audio.currentTime = 0;
+                audio.play();
+            }
+
+            // MediaRecorder設定 (WebM形式で高画質保存)
+            const options = { mimeType: 'video/webm;codecs=vp9', videoBitsPerSecond: 15000000 };
+            const recorder = new MediaRecorder(canvasStream, options);
+            const chunks = [];
+            
+            recorder.ondataavailable = e => chunks.push(e.data);
+            recorder.onstop = () => {
+                const blob = new Blob(chunks, { type: 'video/webm' });
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                // ブラウザ標準はWebMコンテナになりますが、MP4として保存すると多くの環境で読めます
+                a.download = `${document.getElementById('in-title').value || 'WRC_Export'}.mp4`;
+                a.click();
+                
+                isRecording = false;
+                document.getElementById('rec-badge').style.display = 'none';
+                if(audio.src) audio.pause();
+                animState = 'idle';
+            };
+
+            recorder.start();
+
+            // 録画用アニメーションシーケンス
+            animState = 'in';
+            animStartTime = performance.now();
+            
+            // 全ての行が表示されるまで待機（行数 × 80ms + 600ms）+ 3秒キープ
+            const displayTime = (data.length * STAGGER) + SPEED + 3000;
+            await new Promise(r => setTimeout(r, displayTime));
+            
+            // 退場アニメーション
+            animState = 'out';
+            animStartTime = performance.now();
+            await new Promise(r => setTimeout(r, (data.length * STAGGER) + SPEED));
+            
+            recorder.stop();
+        }
+
+        // --- プレビュー ---
+        function triggerPreview() {
+            if(isRecording) return;
+            animState = 'in'; animStartTime = performance.now();
+            if (audio.src) { audio.currentTime = 0; audio.play(); }
+            setTimeout(() => {
+                if(isRecording) return;
+                animState = 'out'; animStartTime = performance.now();
+                setTimeout(() => { animState = 'idle'; if(audio.src) audio.pause(); }, 1500);
+            }, 3000);
+        }
+
+        function requestRender() { if(animState === 'idle') drawFrame(performance.now()); }
+
+        // --- UI構築 ---
+        function buildEditor() {
+            const root = document.getElementById('rows-editor');
+            root.innerHTML = data.map((item, i) => `<div class="editor-section" style="display:flex; gap:5px; align-items:center;">
+                ${item.type === 'day' 
+                    ? `<input type="text" value="${item.text}" oninput="data[${i}].text=this.value;requestRender()">` 
+                    : `<input style="width:70px" type="text" value="${item.day}" oninput="data[${i}].day=this.value;requestRender()"><input type="text" value="${item.time}" oninput="data[${i}].time=this.value;requestRender()">`}
+                <button onclick="data.splice(${i},1);buildEditor();requestRender()" style="background:#822; border:none; color:white; padding:8px; border-radius:4px; cursor:pointer;">X</button>
+            </div>`).join('');
+        }
+        function addRow(t) { data.push(t==='day' ? {type:'day', text:'NEW DATE'} : {type:'stage', day:'00:00', time:'New Stage'}); buildEditor(); requestRender(); }
+
+        // --- ファイル読み込み ---
+        document.getElementById('v-up').onchange = e => { if(e.target.files[0]) { bgVideo.src = URL.createObjectURL(e.target.files[0]); bgVideo.play(); }};
+        document.getElementById('a-up').onchange = e => { if(e.target.files[0]) audio.src = URL.createObjectURL(e.target.files[0]); };
+        
+        // フォントのCanvasへの読み込み処理
+        document.getElementById('f-up').onchange = async e => { 
+            const file = e.target.files[0];
+            if(file) {
+                const fontName = 'CustomFont_' + Date.now();
+                const font = new FontFace(fontName, await file.arrayBuffer());
+                await font.load();
+                document.fonts.add(font);
+                currentFont = `${fontName}, 'Arial Black', sans-serif`;
+                requestRender();
+            }
+        };
+
+        // 初期化
+        buildEditor();
+        requestAnimationFrame(drawFrame);
+    </script>
+</body>
+</html>
